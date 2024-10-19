@@ -1,0 +1,64 @@
+AWSTemplateFormatVersion: '2010-09-09'
+Description: CloudFormation template to create a CodeBuild project without ECR creation.
+
+Parameters:
+  GitHubRepoUrl:
+    Type: String
+    Default: "https://github.com/aboitizpower/apdu-mobileap-deployment.git"
+    Description: The GitHub repository URL to be cloned by CodeBuild.
+
+Resources:
+  # CloudWatch Log Group for CodeBuild Logs
+  CodeBuildLogGroup:
+    Type: AWS::Logs::LogGroup
+    Properties:
+      LogGroupName: "/aws/codebuild/apdu-mobileap-cf-template-test-uat-build"
+      RetentionInDays: 14
+
+  # CodeBuild Project
+  CodeBuildProject:
+    Type: AWS::CodeBuild::Project
+    Properties:
+      Name: "apdu-mobileap-cf-template-test-uat"
+      Source:
+        Type: GITHUB
+        Location: !Ref GitHubRepoUrl
+        GitCloneDepth: 1
+        BuildSpec: |  # Inline BuildSpec definition
+          version: 0.2
+
+          phases:
+            install:
+              commands:
+                - echo "Installing dependencies..."
+            build:
+              commands:
+                - CREDENTIALS="62qyv3hscpbevplwbbiiyznyba4x72vv3t5rkunbzntnydcj6cja"
+                - SERVER_NAME="cf-template-test"
+                - PROJECT_NAME="Aboitiz.Power.MobileAp.Core.SampleServer"
+                - ENVIRONMENT="uat"
+                - BRANCH="uat"
+                - DOTNETSDKPATH="mcr.microsoft.com/dotnet/sdk:8.0"
+                - ASPNETSDKPATH="mcr.microsoft.com/dotnet/aspnet:8.0"
+                - ECR_REPO_NAME="382560948490.dkr.ecr.ap-southeast-1.amazonaws.com"
+                - bash ./build-component.sh $CREDENTIALS $SERVER_NAME $PROJECT_NAME $ENVIRONMENT $BRANCH $DOTNETSDKPATH $ASPNETSDKPATH
+                - bash ./deploy-component-aws.sh $SERVER_NAME $ENVIRONMENT $ECR_REPO_NAME
+          artifacts:
+            files:
+              - '**/*'
+      Artifacts:
+        Type: NO_ARTIFACTS
+      Environment:
+        ComputeType: BUILD_GENERAL1_SMALL
+        Image: "aws/codebuild/standard:5.0"
+        Type: LINUX_CONTAINER
+      LogsConfig:
+        CloudWatchLogs:
+          Status: ENABLED
+          GroupName: !Ref CodeBuildLogGroup
+      ServiceRole: arn:aws:iam::382560948490:role/service-role/apdu-codebuild-service-role
+
+Outputs:
+  CodeBuildProjectName:
+    Description: The name of the CodeBuild project.
+    Value: !Ref CodeBuildProject

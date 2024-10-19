@@ -1,0 +1,36 @@
+AWSTemplateFormatVersion: '2010-09-09'
+Description: CloudFormation template to create an Elastic Container Registry (ECR).
+
+Resources:
+  MyECRRepository:
+    Type: AWS::ECR::Repository
+    Properties:
+      RepositoryName: apdu-mobileap-cf-template-test-uat
+      ImageScanningConfiguration:
+        ScanOnPush: true  # Enable image scanning on push
+      LifecyclePolicy:
+        LifecyclePolicyText: |
+          {
+            "rules": [
+              {
+                "rulePriority": 1,
+                "description": "Expire untagged images after 30 days",
+                "selection": {
+                  "tagStatus": "untagged",
+                  "countType": "sinceImagePushed",
+                  "countUnit": "days",
+                  "countNumber": 30
+                },
+                "action": {
+                  "type": "expire"
+                }
+              }
+            ]
+          }
+
+Outputs:
+  ECRRepositoryURI:
+    Description: URI of the ECR Repository
+    Value: !GetAtt MyECRRepository.RepositoryUri
+    Export:
+      Name: MyECRRepositoryURI  # Export the repository URI to be used in other stacks

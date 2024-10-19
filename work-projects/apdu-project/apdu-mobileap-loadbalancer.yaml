@@ -1,0 +1,70 @@
+AWSTemplateFormatVersion: '2010-09-09'
+Description: CloudFormation template to create an internal Application Load Balancer (ALB) with a security group and target group for dynamic IP addresses.
+
+Resources:
+  # Security Group for Load Balancer
+  LoadBalancerSecurityGroup:
+    Type: AWS::EC2::SecurityGroup
+    Properties: 
+      GroupName: apdu-mobileap-cf-template-test-uat
+      GroupDescription: Security group for internal load balancer
+      VpcId: vpc-0638ddc811a377601  # Replace with your VPC ID
+      SecurityGroupIngress:
+        - IpProtocol: tcp
+          FromPort: 0
+          ToPort: 65535
+          CidrIp: 0.0.0.0/0  # Allow all inbound TCP traffic from anywhere
+      SecurityGroupEgress:
+        - IpProtocol: -1
+          CidrIp: 0.0.0.0/0  # Allow all outbound traffic
+
+  # Internal Load Balancer
+  MyLoadBalancer:
+    Type: AWS::ElasticLoadBalancingV2::LoadBalancer
+    Properties:
+      Name: apdu-mobileap-cf-template-uat
+      Scheme: internal  # This makes it an internal load balancer
+      SecurityGroups: 
+        - !Ref LoadBalancerSecurityGroup
+      Subnets:
+        - subnet-0218462c6b5886d5e  # Replace with your Subnet 1 ID
+        - subnet-0af2143fc2d1589d7  # Replace with your Subnet 2 ID
+      Type: application
+
+  # Target Group for IP-based Targets
+  MyTargetGroup:
+    Type: AWS::ElasticLoadBalancingV2::TargetGroup
+    Properties:
+      Name: apdu-mobileap-cf-template-uat
+      VpcId: vpc-0638ddc811a377601  # Replace with your VPC ID
+      TargetType: ip  # Target IP addresses directly
+      Protocol: HTTP
+      Port: 80  # Change if needed
+      HealthCheckPath: /ping  # Health check path
+      HealthCheckIntervalSeconds: 30
+      HealthCheckTimeoutSeconds: 5
+      HealthyThresholdCount: 5
+      UnhealthyThresholdCount: 2
+      Matcher:
+        HttpCode: 200  # Expected HTTP code for health check success
+      # Targets will be registered dynamically, so no hardcoded IPs
+
+  # Listener for Load Balancer (HTTP)
+  MyLoadBalancerListener:
+    Type: AWS::ElasticLoadBalancingV2::Listener
+    Properties:
+      LoadBalancerArn: !Ref MyLoadBalancer
+      Protocol: HTTP
+      Port: 80
+      DefaultActions:
+        - Type: forward
+          TargetGroupArn: !Ref MyTargetGroup
+
+Outputs:
+  LoadBalancerDNSName:
+    Description: DNS name of the internal load balancer
+    Value: !GetAtt MyLoadBalancer.DNSName
+
+  TargetGroupName:
+    Description: Name of the Target Group
+    Value: !Ref MyTargetGroup
