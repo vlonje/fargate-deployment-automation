@@ -331,7 +331,8 @@ validate_naming_conventions() {
     local param_dir="$PROJECT_ROOT/cloudformation/parameters"
     
     if [ -f "$param_dir/staging.json.example" ]; then
-        local stack_prefix=$(jq -r '.StackNamePrefix // empty' "$param_dir/staging.json.example" 2>/dev/null)
+        local stack_prefix
+        stack_prefix=$(jq -r '.StackNamePrefix // empty' "$param_dir/staging.json.example" 2>/dev/null)
         
         if [ -n "$stack_prefix" ]; then
             if [[ "$stack_prefix" =~ ^[a-z][a-z0-9-]*$ ]]; then

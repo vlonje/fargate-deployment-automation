@@ -21,7 +21,6 @@ set -e
 # Color codes
 RED='\033[0;31m'
 GREEN='\033[0;32m'
-YELLOW='\033[1;33m'
 BLUE='\033[0;34m'
 NC='\033[0m'
 
@@ -105,7 +104,8 @@ rollback_service() {
     
     # Get current task definition
     log_info "Getting current task definition..."
-    local current_task_def=$(aws ecs describe-services \
+    local current_task_def
+    current_task_def=$(aws ecs describe-services \
         --cluster "$cluster_name" \
         --services "$service_name" \
         --region "$AWS_REGION" \
@@ -132,8 +132,8 @@ rollback_service() {
         exit 1
     fi
     
-    local target_task_def="arn:aws:ecs:${AWS_REGION}:$(aws sts get-caller-identity --query Account --output text):task-definition/${task_family}:${revision}"
-    
+    local target_task_def
+    target_task_def="arn:aws:ecs:${AWS_REGION}:$(aws sts get-caller-identity --query Account --output text):task-definition/${task_family}:${revision}"
     log_warning "Rolling back service to: $target_task_def"
     read -p "Are you sure? (yes/no) " -r
     

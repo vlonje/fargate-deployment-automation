@@ -261,6 +261,7 @@ main() {
     # Summary
     log_section "Deployment Complete!"
     
+    # shellcheck disable=SC2016
     ALB_URL=$(aws cloudformation describe-stacks \
         --stack-name "${STACK_PREFIX}-${ENVIRONMENT}-alb" \
         --region "$AWS_REGION" \
