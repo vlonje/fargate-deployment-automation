@@ -1,0 +1,173 @@
+AWSTemplateFormatVersion: '2010-09-09'
+Description: >
+  ECR Repository for Fargate Deployment Automation.
+  This template creates an Elastic Container Registry (ECR) repository
+  for storing Docker images. It includes image scanning, lifecycle policies,
+  and dynamic exports for use with other stacks.
+
+################################################################################
+# Parameters
+################################################################################
+Parameters:
+  StackNamePrefix:
+    Type: String
+    Description: Prefix for stack naming (e.g., vin-app)
+    AllowedPattern: ^[a-z][a-z0-9-]*$
+    ConstraintDescription: Must start with lowercase letter and contain only lowercase letters, numbers, and hyphens
+    Default: vin-app
+
+  Environment:
+    Type: String
+    Description: Environment name (staging or prod)
+    AllowedValues:
+      - staging
+      - prod
+    Default: staging
+
+  ProjectName:
+    Type: String
+    Description: Name of the project (used for tagging)
+    AllowedPattern: ^[a-z][a-z0-9-]*$
+    ConstraintDescription: Must contain only lowercase letters, numbers, and hyphens
+    Default: vin-app
+
+  ImageTagMutability:
+    Type: String
+    Description: The tag mutability setting for the repository (MUTABLE allows overwriting tags like 'latest')
+    AllowedValues:
+      - MUTABLE
+      - IMMUTABLE
+    Default: MUTABLE
+
+  ScanOnPush:
+    Type: String
+    Description: Enable image scanning on push for security vulnerabilities
+    AllowedValues:
+      - 'true'
+      - 'false'
+    Default: 'true'
+
+  MaxImageCount:
+    Type: Number
+    Description: Maximum number of images to retain (older images will be deleted)
+    Default: 10
+    MinValue: 1
+    MaxValue: 100
+
+################################################################################
+# Metadata
+################################################################################
+Metadata:
+  AWS::CloudFormation::Interface:
+    ParameterGroups:
+      - Label:
+          default: Stack Configuration
+        Parameters:
+          - StackNamePrefix
+          - Environment
+          - ProjectName
+      - Label:
+          default: Repository Settings
+        Parameters:
+          - ImageTagMutability
+          - ScanOnPush
+          - MaxImageCount
+    ParameterLabels:
+      StackNamePrefix:
+        default: Stack Name Prefix
+      Environment:
+        default: Environment
+      ProjectName:
+        default: Project Name
+      ImageTagMutability:
+        default: Image Tag Mutability
+      ScanOnPush:
+        default: Scan Images on Push
+      MaxImageCount:
+        default: Maximum Image Count
+
+################################################################################
+# Resources
+################################################################################
+Resources:
+  
+  ##############################################################################
+  # ECR Repository
+  ##############################################################################
+  ECRRepository:
+    Type: AWS::ECR::Repository
+    Properties:
+      RepositoryName: !Sub '${StackNamePrefix}-${Environment}'
+      ImageTagMutability: !Ref ImageTagMutability
+      ImageScanningConfiguration:
+        ScanOnPush: !Ref ScanOnPush
+      LifecyclePolicy:
+        LifecyclePolicyText: !Sub |
+          {
+            "rules": [
+              {
+                "rulePriority": 1,
+                "description": "Keep only ${MaxImageCount} images, expire all others",
+                "selection": {
+                  "tagStatus": "any",
+                  "countType": "imageCountMoreThan",
+                  "countNumber": ${MaxImageCount}
+                },
+                "action": {
+                  "type": "expire"
+                }
+              }
+            ]
+          }
+      Tags:
+        - Key: Name
+          Value: !Sub '${StackNamePrefix}-${Environment}-ecr'
+        - Key: Environment
+          Value: !Ref Environment
+        - Key: Project
+          Value: !Ref ProjectName
+        - Key: ManagedBy
+          Value: CloudFormation
+        - Key: Stack
+          Value: !Ref AWS::StackName
+
+################################################################################
+# Outputs
+################################################################################
+Outputs:
+  
+  RepositoryArn:
+    Description: ARN of the ECR repository
+    Value: !GetAtt ECRRepository.Arn
+    Export:
+      Name: !Sub '${AWS::StackName}-RepositoryArn'
+
+  RepositoryUri:
+    Description: URI of the ECR repository (used for docker push/pull)
+    Value: !GetAtt ECRRepository.RepositoryUri
+    Export:
+      Name: !Sub '${AWS::StackName}-RepositoryUri'
+
+  RepositoryName:
+    Description: Name of the ECR repository
+    Value: !Ref ECRRepository
+    Export:
+      Name: !Sub '${AWS::StackName}-RepositoryName'
+
+  StackName:
+    Description: Name of this CloudFormation stack
+    Value: !Ref AWS::StackName
+    Export:
+      Name: !Sub '${AWS::StackName}-StackName'
+
+  Environment:
+    Description: Environment this repository belongs to
+    Value: !Ref Environment
+    Export:
+      Name: !Sub '${AWS::StackName}-Environment'
+
+  ProjectName:
+    Description: Project name this repository belongs to
+    Value: !Ref ProjectName
+    Export:
+      Name: !Sub '${AWS::StackName}-ProjectName'

@@ -1,0 +1,160 @@
+version: 0.2
+
+################################################################################
+# CodeBuild Buildspec for Docker Image Build and Deploy
+#
+# This buildspec:
+# 1. Logs into ECR
+# 2. Builds Docker image from your Dockerfile
+# 3. Tags with :latest
+# 4. Pushes to ECR
+# 5. Forces ECS service deployment to pull new image
+#
+# Environment variables (set by CloudFormation):
+# - AWS_DEFAULT_REGION: AWS region
+# - AWS_ACCOUNT_ID: AWS account ID
+# - REPOSITORY_URI: ECR repository URI
+# - ENVIRONMENT: staging or prod
+# - PROJECT_NAME: Project name
+# - DOCKERFILE_PATH: Path to Dockerfile
+# - STACK_NAME_PREFIX: Stack name prefix
+################################################################################
+
+phases:
+  
+  ############################################################################
+  # Pre-Build Phase
+  # - Log environment info
+  # - Login to ECR
+  # - Set image tags
+  ############################################################################
+  pre_build:
+    commands:
+      - echo "============================================="
+      - echo "Pre-Build Phase - Starting"
+      - echo "============================================="
+      - echo "AWS Region:        $AWS_DEFAULT_REGION"
+      - echo "AWS Account:       $AWS_ACCOUNT_ID"
+      - echo "Repository URI:    $REPOSITORY_URI"
+      - echo "Environment:       $ENVIRONMENT"
+      - echo "Project Name:      $PROJECT_NAME"
+      - echo "Dockerfile Path:   $DOCKERFILE_PATH"
+      - echo "Stack Prefix:      $STACK_NAME_PREFIX"
+      - echo "Build ID:          $CODEBUILD_BUILD_ID"
+      - echo "Source Version:    $CODEBUILD_RESOLVED_SOURCE_VERSION"
+      - echo ""
+      
+      - echo "[INFO] Logging into Amazon ECR..."
+      - aws ecr get-login-password --region $AWS_DEFAULT_REGION | docker login --username AWS --password-stdin $AWS_ACCOUNT_ID.dkr.ecr.$AWS_DEFAULT_REGION.amazonaws.com
+      - echo "[SUCCESS] Successfully logged into ECR"
+      - echo ""
+      
+      - echo "[INFO] Setting image tags..."
+      - export IMAGE_TAG=latest
+      - export IMAGE_URI=$REPOSITORY_URI:$IMAGE_TAG
+      - echo "Image URI:         $IMAGE_URI"
+      - echo ""
+      
+      - echo "[INFO] Checking Dockerfile exists..."
+      - |
+        if [ ! -f "$DOCKERFILE_PATH" ]; then
+          echo "[ERROR] Dockerfile not found at: $DOCKERFILE_PATH"
+          exit 1
+        fi
+      - echo "[SUCCESS] Dockerfile found at: $DOCKERFILE_PATH"
+      - echo ""
+      
+      - echo "============================================="
+      - echo "Pre-Build Phase - Completed"
+      - echo "============================================="
+      - echo ""
+
+  ############################################################################
+  # Build Phase
+  # - Build Docker image
+  # - Tag image
+  ############################################################################
+  build:
+    commands:
+      - echo "============================================="
+      - echo "Build Phase - Starting"
+      - echo "============================================="
+      
+      - echo "[INFO] Building Docker image..."
+      - echo "Build command: docker build -f $DOCKERFILE_PATH -t $IMAGE_URI ."
+      - docker build -f $DOCKERFILE_PATH -t $IMAGE_URI .
+      - echo "[SUCCESS] Docker image built successfully"
+      - echo ""
+      
+      - echo "[INFO] Image details:"
+      - docker images | grep $REPOSITORY_URI | head -1
+      - echo ""
+      
+      - echo "============================================="
+      - echo "Build Phase - Completed"
+      - echo "============================================="
+      - echo ""
+
+  ############################################################################
+  # Post-Build Phase
+  # - Push image to ECR
+  # - Update ECS service (force new deployment)
+  ############################################################################
+  post_build:
+    commands:
+      - echo "============================================="
+      - echo "Post-Build Phase - Starting"
+      - echo "============================================="
+      
+      - echo "[INFO] Pushing Docker image to ECR..."
+      - docker push $IMAGE_URI
+      - echo "[SUCCESS] Image pushed to ECR: $IMAGE_URI"
+      - echo ""
+      
+      - echo "[INFO] Checking if ECS service exists..."
+      - export CLUSTER_NAME="${STACK_NAME_PREFIX}-${ENVIRONMENT}-cluster"
+      - export SERVICE_NAME="${STACK_NAME_PREFIX}-${ENVIRONMENT}-service"
+      - echo "Cluster:           $CLUSTER_NAME"
+      - echo "Service:           $SERVICE_NAME"
+      - echo ""
+      
+      - |
+        if aws ecs describe-services --cluster $CLUSTER_NAME --services $SERVICE_NAME --region $AWS_DEFAULT_REGION --query 'services[0].serviceName' --output text 2>/dev/null | grep -q "$SERVICE_NAME"; then
+          echo "[INFO] ECS service found. Forcing new deployment..."
+          aws ecs update-service \
+            --cluster $CLUSTER_NAME \
+            --service $SERVICE_NAME \
+            --force-new-deployment \
+            --region $AWS_DEFAULT_REGION
+          echo "[SUCCESS] ECS service deployment triggered"
+        else
+          echo "[INFO] ECS service not found yet. Skipping deployment update."
+          echo "[INFO] Service will automatically use this image when created."
+        fi
+      - echo ""
+      
+      - echo "============================================="
+      - echo "Post-Build Phase - Completed"
+      - echo "============================================="
+      - echo ""
+      
+      - echo "✅ BUILD SUCCESSFUL!"
+      - echo "Image:             $IMAGE_URI"
+      - echo "Environment:       $ENVIRONMENT"
+      - echo "Build ID:          $CODEBUILD_BUILD_ID"
+      - echo ""
+
+################################################################################
+# Artifacts (not used, but can be configured if needed)
+################################################################################
+artifacts:
+  files:
+    - '**/*'
+  name: build-output
+
+################################################################################
+# Cache (speeds up subsequent builds)
+################################################################################
+cache:
+  paths:
+    - '/root/.docker/**/*'

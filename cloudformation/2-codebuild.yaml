@@ -1,0 +1,220 @@
+AWSTemplateFormatVersion: '2010-09-09'
+Description: >
+  CodeBuild Project for Fargate Deployment Automation.
+  This template creates a CodeBuild project that clones code from GitHub,
+  builds a Docker image, and pushes it to ECR. Supports both public and
+  private GitHub repositories.
+
+################################################################################
+# Parameters
+################################################################################
+Parameters:
+  StackNamePrefix:
+    Type: String
+    Description: Prefix for stack naming (e.g., vin-app)
+    AllowedPattern: ^[a-z][a-z0-9-]*$
+    ConstraintDescription: Must start with lowercase letter and contain only lowercase letters, numbers, and hyphens
+    Default: vin-app
+
+  Environment:
+    Type: String
+    Description: Environment name (staging or prod)
+    AllowedValues:
+      - staging
+      - prod
+    Default: staging
+
+  ProjectName:
+    Type: String
+    Description: Name of the project
+    AllowedPattern: ^[a-z][a-z0-9-]*$
+    Default: vin-app
+
+  GitHubRepo:
+    Type: String
+    Description: GitHub repository URL (e.g., https://github.com/username/repo)
+    Default: https://github.com/yourusername/your-repo
+
+  GitHubBranch:
+    Type: String
+    Description: Git branch to build from
+    Default: main
+
+  DockerfilePath:
+    Type: String
+    Description: Path to Dockerfile relative to repository root
+    Default: ./Dockerfile
+
+  CodeBuildServiceRoleArn:
+    Type: String
+    Description: ARN of IAM role for CodeBuild (must have ECR push, ECS update, logs write permissions)
+
+  BuildComputeType:
+    Type: String
+    Description: CodeBuild compute type
+    AllowedValues:
+      - BUILD_GENERAL1_SMALL
+      - BUILD_GENERAL1_MEDIUM
+      - BUILD_GENERAL1_LARGE
+    Default: BUILD_GENERAL1_SMALL
+
+  BuildImage:
+    Type: String
+    Description: CodeBuild Docker image
+    Default: aws/codebuild/standard:7.0
+
+################################################################################
+# Metadata
+################################################################################
+Metadata:
+  AWS::CloudFormation::Interface:
+    ParameterGroups:
+      - Label:
+          default: Stack Configuration
+        Parameters:
+          - StackNamePrefix
+          - Environment
+          - ProjectName
+      - Label:
+          default: Source Configuration
+        Parameters:
+          - GitHubRepo
+          - GitHubBranch
+          - DockerfilePath
+      - Label:
+          default: Build Configuration
+        Parameters:
+          - BuildComputeType
+          - BuildImage
+      - Label:
+          default: IAM Configuration
+        Parameters:
+          - CodeBuildServiceRoleArn
+    ParameterLabels:
+      StackNamePrefix:
+        default: Stack Name Prefix
+      Environment:
+        default: Environment
+      ProjectName:
+        default: Project Name
+      GitHubRepo:
+        default: GitHub Repository URL
+      GitHubBranch:
+        default: GitHub Branch
+      DockerfilePath:
+        default: Dockerfile Path
+      CodeBuildServiceRoleArn:
+        default: CodeBuild Service Role ARN
+      BuildComputeType:
+        default: Build Compute Type
+      BuildImage:
+        default: Build Image
+
+################################################################################
+# Resources
+################################################################################
+Resources:
+
+  ##############################################################################
+  # CloudWatch Logs Group for CodeBuild
+  ##############################################################################
+  CodeBuildLogGroup:
+    Type: AWS::Logs::LogGroup
+    Properties:
+      LogGroupName: !Sub '/aws/codebuild/${StackNamePrefix}-${Environment}-build'
+      RetentionInDays: 7
+      Tags:
+        - Key: Name
+          Value: !Sub '${StackNamePrefix}-${Environment}-codebuild-logs'
+        - Key: Environment
+          Value: !Ref Environment
+        - Key: Project
+          Value: !Ref ProjectName
+        - Key: ManagedBy
+          Value: CloudFormation
+
+  ##############################################################################
+  # CodeBuild Project
+  ##############################################################################
+  CodeBuildProject:
+    Type: AWS::CodeBuild::Project
+    Properties:
+      Name: !Sub '${StackNamePrefix}-${Environment}-build'
+      Description: !Sub 'Build Docker images for ${ProjectName} ${Environment}'
+      ServiceRole: !Ref CodeBuildServiceRoleArn
+      Artifacts:
+        Type: NO_ARTIFACTS
+      Environment:
+        Type: LINUX_CONTAINER
+        ComputeType: !Ref BuildComputeType
+        Image: !Ref BuildImage
+        PrivilegedMode: true  # Required for Docker builds
+        EnvironmentVariables:
+          - Name: AWS_DEFAULT_REGION
+            Value: !Ref AWS::Region
+          - Name: AWS_ACCOUNT_ID
+            Value: !Ref AWS::AccountId
+          - Name: REPOSITORY_URI
+            Value: !Sub 
+              - '${RepositoryUri}'
+              - RepositoryUri: 
+                  Fn::ImportValue: !Sub '${StackNamePrefix}-${Environment}-ecr-RepositoryUri'
+          - Name: ENVIRONMENT
+            Value: !Ref Environment
+          - Name: PROJECT_NAME
+            Value: !Ref ProjectName
+          - Name: DOCKERFILE_PATH
+            Value: !Ref DockerfilePath
+          - Name: STACK_NAME_PREFIX
+            Value: !Ref StackNamePrefix
+      Source:
+        Type: GITHUB
+        Location: !Ref GitHubRepo
+        GitCloneDepth: 1
+        BuildSpec: buildspec.yml
+        SourceIdentifier: !Ref GitHubBranch
+      SourceVersion: !Sub 'refs/heads/${GitHubBranch}'
+      LogsConfig:
+        CloudWatchLogs:
+          Status: ENABLED
+          GroupName: !Ref CodeBuildLogGroup
+      Tags:
+        - Key: Name
+          Value: !Sub '${StackNamePrefix}-${Environment}-codebuild'
+        - Key: Environment
+          Value: !Ref Environment
+        - Key: Project
+          Value: !Ref ProjectName
+        - Key: ManagedBy
+          Value: CloudFormation
+        - Key: Stack
+          Value: !Ref AWS::StackName
+
+################################################################################
+# Outputs
+################################################################################
+Outputs:
+
+  CodeBuildProjectName:
+    Description: Name of the CodeBuild project
+    Value: !Ref CodeBuildProject
+    Export:
+      Name: !Sub '${AWS::StackName}-ProjectName'
+
+  CodeBuildProjectArn:
+    Description: ARN of the CodeBuild project
+    Value: !GetAtt CodeBuildProject.Arn
+    Export:
+      Name: !Sub '${AWS::StackName}-ProjectArn'
+
+  LogGroupName:
+    Description: CloudWatch Logs group name for CodeBuild
+    Value: !Ref CodeBuildLogGroup
+    Export:
+      Name: !Sub '${AWS::StackName}-LogGroupName'
+
+  StackName:
+    Description: Name of this CloudFormation stack
+    Value: !Ref AWS::StackName
+    Export:
+      Name: !Sub '${AWS::StackName}-StackName'

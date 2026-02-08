@@ -1,0 +1,278 @@
+AWSTemplateFormatVersion: '2010-09-09'
+Description: >
+  ECS Cluster for Fargate Deployment Automation.
+  Creates an ECS cluster with a Lambda-based custom resource that checks
+  if the cluster already exists before creating it. This prevents errors
+  when deploying multiple services to the same cluster.
+
+################################################################################
+# Parameters
+################################################################################
+Parameters:
+  StackNamePrefix:
+    Type: String
+    Description: Prefix for stack naming (e.g., vin-app)
+    AllowedPattern: ^[a-z][a-z0-9-]*$
+    ConstraintDescription: Must start with lowercase letter and contain only lowercase letters, numbers, and hyphens
+    Default: vin-app
+
+  Environment:
+    Type: String
+    Description: Environment name (staging or prod)
+    AllowedValues:
+      - staging
+      - prod
+    Default: staging
+
+  ProjectName:
+    Type: String
+    Description: Name of the project
+    AllowedPattern: ^[a-z][a-z0-9-]*$
+    Default: vin-app
+
+  ClusterName:
+    Type: String
+    Description: Name of the ECS cluster (leave empty to use default naming)
+    Default: ''
+
+################################################################################
+# Conditions
+################################################################################
+Conditions:
+  UseDefaultClusterName: !Equals [!Ref ClusterName, '']
+
+################################################################################
+# Metadata
+################################################################################
+Metadata:
+  AWS::CloudFormation::Interface:
+    ParameterGroups:
+      - Label:
+          default: Stack Configuration
+        Parameters:
+          - StackNamePrefix
+          - Environment
+          - ProjectName
+      - Label:
+          default: Cluster Configuration
+        Parameters:
+          - ClusterName
+    ParameterLabels:
+      StackNamePrefix:
+        default: Stack Name Prefix
+      Environment:
+        default: Environment
+      ProjectName:
+        default: Project Name
+      ClusterName:
+        default: Cluster Name (Optional)
+
+################################################################################
+# Resources
+################################################################################
+Resources:
+
+  ##############################################################################
+  # IAM Role for Lambda Function
+  ##############################################################################
+  ClusterCheckerLambdaRole:
+    Type: AWS::IAM::Role
+    Properties:
+      RoleName: !Sub '${StackNamePrefix}-${Environment}-cluster-checker-role'
+      AssumeRolePolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service: lambda.amazonaws.com
+            Action: sts:AssumeRole
+      ManagedPolicyArns:
+        - arn:aws:iam::aws:policy/service-role/AWSLambdaBasicExecutionRole
+      Policies:
+        - PolicyName: ECSClusterAccess
+          PolicyDocument:
+            Version: '2012-10-17'
+            Statement:
+              - Effect: Allow
+                Action:
+                  - ecs:DescribeClusters
+                  - ecs:ListClusters
+                  - ecs:CreateCluster
+                  - ecs:DeleteCluster
+                  - ecs:TagResource
+                  - ecs:PutClusterCapacityProviders
+                Resource: '*'
+      Tags:
+        - Key: Name
+          Value: !Sub '${StackNamePrefix}-${Environment}-cluster-checker-role'
+        - Key: Environment
+          Value: !Ref Environment
+        - Key: Project
+          Value: !Ref ProjectName
+        - Key: ManagedBy
+          Value: CloudFormation
+
+  ##############################################################################
+  # Lambda Function to Check/Create Cluster
+  ##############################################################################
+  ClusterCheckerFunction:
+    Type: AWS::Lambda::Function
+    Properties:
+      FunctionName: !Sub '${StackNamePrefix}-${Environment}-cluster-checker'
+      Runtime: python3.11
+      Handler: index.handler
+      Role: !GetAtt ClusterCheckerLambdaRole.Arn
+      Timeout: 60
+      Code:
+        ZipFile: |
+          import json
+          import boto3
+          import cfnresponse
+          
+          ecs = boto3.client('ecs')
+          
+          def handler(event, context):
+              print(f"Event: {json.dumps(event)}")
+              
+              request_type = event['RequestType']
+              cluster_name = event['ResourceProperties']['ClusterName']
+              
+              try:
+                  if request_type == 'Create':
+                      # Check if cluster exists
+                      response = ecs.describe_clusters(clusters=[cluster_name])
+                      
+                      if response['clusters']:
+                          cluster = response['clusters'][0]
+                          if cluster['status'] == 'ACTIVE':
+                              print(f"Cluster {cluster_name} already exists and is active")
+                              cluster_arn = cluster['clusterArn']
+                              cfnresponse.send(event, context, cfnresponse.SUCCESS, {
+                                  'ClusterArn': cluster_arn,
+                                  'ClusterName': cluster_name,
+                                  'AlreadyExisted': 'true'
+                              })
+                              return
+                      
+                      # Cluster doesn't exist, create it
+                      print(f"Creating cluster {cluster_name}")
+                      create_response = ecs.create_cluster(
+                          clusterName=cluster_name,
+                          capacityProviders=['FARGATE', 'FARGATE_SPOT'],
+                          defaultCapacityProviderStrategy=[
+                              {
+                                  'capacityProvider': 'FARGATE',
+                                  'weight': 1,
+                                  'base': 0
+                              }
+                          ],
+                          settings=[
+                              {
+                                  'name': 'containerInsights',
+                                  'value': 'enabled'
+                              }
+                          ],
+                          tags=[
+                              {'key': 'Environment', 'value': event['ResourceProperties'].get('Environment', 'unknown')},
+                              {'key': 'Project', 'value': event['ResourceProperties'].get('ProjectName', 'unknown')},
+                              {'key': 'ManagedBy', 'value': 'CloudFormation'}
+                          ]
+                      )
+                      
+                      cluster_arn = create_response['cluster']['clusterArn']
+                      print(f"Cluster created successfully: {cluster_arn}")
+                      
+                      cfnresponse.send(event, context, cfnresponse.SUCCESS, {
+                          'ClusterArn': cluster_arn,
+                          'ClusterName': cluster_name,
+                          'AlreadyExisted': 'false'
+                      })
+                  
+                  elif request_type == 'Update':
+                      # For updates, just return existing cluster info
+                      response = ecs.describe_clusters(clusters=[cluster_name])
+                      if response['clusters']:
+                          cluster_arn = response['clusters'][0]['clusterArn']
+                          cfnresponse.send(event, context, cfnresponse.SUCCESS, {
+                              'ClusterArn': cluster_arn,
+                              'ClusterName': cluster_name,
+                              'AlreadyExisted': 'true'
+                          })
+                      else:
+                          cfnresponse.send(event, context, cfnresponse.FAILED, {}, 
+                              reason=f"Cluster {cluster_name} not found during update")
+                  
+                  elif request_type == 'Delete':
+                      # Check if cluster was created by this stack
+                      physical_resource_id = event.get('PhysicalResourceId', '')
+                      already_existed = event['ResourceProperties'].get('AlreadyExisted', 'false')
+                      
+                      # Only delete if we created it
+                      if already_existed == 'false':
+                          print(f"Deleting cluster {cluster_name} as it was created by this stack")
+                          try:
+                              ecs.delete_cluster(cluster=cluster_name)
+                              print(f"Cluster {cluster_name} deleted successfully")
+                          except Exception as e:
+                              print(f"Error deleting cluster (may not exist): {e}")
+                      else:
+                          print(f"Cluster {cluster_name} existed before this stack, not deleting")
+                      
+                      cfnresponse.send(event, context, cfnresponse.SUCCESS, {})
+              
+              except Exception as e:
+                  print(f"Error: {str(e)}")
+                  cfnresponse.send(event, context, cfnresponse.FAILED, {}, 
+                      reason=str(e))
+      Tags:
+        - Key: Name
+          Value: !Sub '${StackNamePrefix}-${Environment}-cluster-checker'
+        - Key: Environment
+          Value: !Ref Environment
+        - Key: Project
+          Value: !Ref ProjectName
+        - Key: ManagedBy
+          Value: CloudFormation
+
+  ##############################################################################
+  # Custom Resource to Check/Create Cluster
+  ##############################################################################
+  ECSClusterResource:
+    Type: Custom::ECSCluster
+    Properties:
+      ServiceToken: !GetAtt ClusterCheckerFunction.Arn
+      ClusterName: !If
+        - UseDefaultClusterName
+        - !Sub '${StackNamePrefix}-${Environment}-cluster'
+        - !Ref ClusterName
+      Environment: !Ref Environment
+      ProjectName: !Ref ProjectName
+
+################################################################################
+# Outputs
+################################################################################
+Outputs:
+
+  ClusterArn:
+    Description: ARN of the ECS cluster
+    Value: !GetAtt ECSClusterResource.ClusterArn
+    Export:
+      Name: !Sub '${AWS::StackName}-ClusterArn'
+
+  ClusterName:
+    Description: Name of the ECS cluster
+    Value: !GetAtt ECSClusterResource.ClusterName
+    Export:
+      Name: !Sub '${AWS::StackName}-ClusterName'
+
+  AlreadyExisted:
+    Description: Whether the cluster already existed before this stack
+    Value: !GetAtt ECSClusterResource.AlreadyExisted
+    Export:
+      Name: !Sub '${AWS::StackName}-AlreadyExisted'
+
+  StackName:
+    Description: Name of this CloudFormation stack
+    Value: !Ref AWS::StackName
+    Export:
+      Name: !Sub '${AWS::StackName}-StackName'

@@ -1,0 +1,80 @@
+# AWS Parameter Files (contain sensitive data)
+cloudformation/parameters/staging.json
+cloudformation/parameters/prod.json
+
+# Exclude example files from ignore (these should be committed)
+!cloudformation/parameters/*.example
+
+# AWS Credentials
+.aws/
+*.pem
+*.key
+
+# Environment Variables
+.env
+.env.local
+*.env
+
+# Logs
+*.log
+logs/
+*.log.*
+
+# OS Files
+.DS_Store
+Thumbs.db
+*.swp
+*.swo
+*~
+
+# IDE
+.vscode/
+.idea/
+*.iml
+*.code-workspace
+
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+venv/
+env/
+*.egg-info/
+
+# Virtual Environments
+venv/
+ENV/
+env/
+.venv/
+
+# Node modules (if using any JS tooling)
+node_modules/
+
+# Terraform state (in case mixed with TF)
+*.tfstate
+*.tfstate.*
+.terraform/
+
+# CloudFormation outputs
+cloudformation-outputs/
+stack-outputs/
+
+# Temporary files
+tmp/
+temp/
+*.tmp
+
+# Build artifacts
+build/
+dist/
+target/
+
+# Package files
+*.zip
+*.tar.gz
+
+# Local testing artifacts
+.localstack/
+local-aws/

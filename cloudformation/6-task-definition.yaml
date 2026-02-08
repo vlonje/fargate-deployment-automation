@@ -1,0 +1,235 @@
+AWSTemplateFormatVersion: '2010-09-09'
+Description: >
+  ECS Task Definition for Fargate Deployment Automation.
+  Creates a Fargate-compatible task definition with container configuration,
+  CloudWatch Logs integration, and proper IAM role assignments.
+
+################################################################################
+# Parameters
+################################################################################
+Parameters:
+  StackNamePrefix:
+    Type: String
+    Description: Prefix for stack naming (e.g., vin-app)
+    AllowedPattern: ^[a-z][a-z0-9-]*$
+    ConstraintDescription: Must start with lowercase letter and contain only lowercase letters, numbers, and hyphens
+    Default: vin-app
+
+  Environment:
+    Type: String
+    Description: Environment name (staging or prod)
+    AllowedValues:
+      - staging
+      - prod
+    Default: staging
+
+  ProjectName:
+    Type: String
+    Description: Name of the project
+    AllowedPattern: ^[a-z][a-z0-9-]*$
+    Default: vin-app
+
+  ContainerPort:
+    Type: Number
+    Description: Port your application listens on inside the container
+    Default: 8080
+    MinValue: 1
+    MaxValue: 65535
+
+  TaskCPU:
+    Type: String
+    Description: CPU units for the task (256, 512, 1024, 2048, 4096)
+    AllowedValues:
+      - '256'
+      - '512'
+      - '1024'
+      - '2048'
+      - '4096'
+    Default: '256'
+
+  TaskMemory:
+    Type: String
+    Description: Memory in MB for the task (must be compatible with CPU)
+    AllowedValues:
+      - '512'
+      - '1024'
+      - '2048'
+      - '3072'
+      - '4096'
+      - '5120'
+      - '6144'
+      - '7168'
+      - '8192'
+      - '16384'
+      - '30720'
+    Default: '512'
+
+  ECSTaskExecutionRoleArn:
+    Type: String
+    Description: ARN of IAM role for ECS task execution (pulls images, writes logs)
+
+  ECSTaskRoleArn:
+    Type: String
+    Description: ARN of IAM role for the application running in the task
+
+################################################################################
+# Metadata
+################################################################################
+Metadata:
+  AWS::CloudFormation::Interface:
+    ParameterGroups:
+      - Label:
+          default: Stack Configuration
+        Parameters:
+          - StackNamePrefix
+          - Environment
+          - ProjectName
+      - Label:
+          default: Container Configuration
+        Parameters:
+          - ContainerPort
+          - TaskCPU
+          - TaskMemory
+      - Label:
+          default: IAM Configuration
+        Parameters:
+          - ECSTaskExecutionRoleArn
+          - ECSTaskRoleArn
+    ParameterLabels:
+      StackNamePrefix:
+        default: Stack Name Prefix
+      Environment:
+        default: Environment
+      ProjectName:
+        default: Project Name
+      ContainerPort:
+        default: Container Port
+      TaskCPU:
+        default: Task CPU
+      TaskMemory:
+        default: Task Memory
+      ECSTaskExecutionRoleArn:
+        default: ECS Task Execution Role ARN
+      ECSTaskRoleArn:
+        default: ECS Task Role ARN
+
+################################################################################
+# Resources
+################################################################################
+Resources:
+
+  ##############################################################################
+  # CloudWatch Logs Group
+  ##############################################################################
+  LogGroup:
+    Type: AWS::Logs::LogGroup
+    Properties:
+      LogGroupName: !Sub '/ecs/${StackNamePrefix}-${Environment}'
+      RetentionInDays: 7
+      Tags:
+        - Key: Name
+          Value: !Sub '${StackNamePrefix}-${Environment}-logs'
+        - Key: Environment
+          Value: !Ref Environment
+        - Key: Project
+          Value: !Ref ProjectName
+        - Key: ManagedBy
+          Value: CloudFormation
+
+  ##############################################################################
+  # ECS Task Definition
+  ##############################################################################
+  TaskDefinition:
+    Type: AWS::ECS::TaskDefinition
+    Properties:
+      Family: !Sub '${StackNamePrefix}-${Environment}'
+      NetworkMode: awsvpc
+      RequiresCompatibilities:
+        - FARGATE
+      Cpu: !Ref TaskCPU
+      Memory: !Ref TaskMemory
+      ExecutionRoleArn: !Ref ECSTaskExecutionRoleArn
+      TaskRoleArn: !Ref ECSTaskRoleArn
+      ContainerDefinitions:
+        - Name: !Sub '${StackNamePrefix}-${Environment}-container'
+          Image: !Sub
+            - '${RepositoryUri}:latest'
+            - RepositoryUri:
+                Fn::ImportValue: !Sub '${StackNamePrefix}-${Environment}-ecr-RepositoryUri'
+          Essential: true
+          PortMappings:
+            - ContainerPort: !Ref ContainerPort
+              Protocol: tcp
+          LogConfiguration:
+            LogDriver: awslogs
+            Options:
+              awslogs-group: !Ref LogGroup
+              awslogs-region: !Ref AWS::Region
+              awslogs-stream-prefix: ecs
+          Environment:
+            - Name: ENVIRONMENT
+              Value: !Ref Environment
+            - Name: PROJECT_NAME
+              Value: !Ref ProjectName
+            - Name: AWS_REGION
+              Value: !Ref AWS::Region
+          HealthCheck:
+            Command:
+              - CMD-SHELL
+              - !Sub 'curl -f http://localhost:${ContainerPort}/health || exit 1'
+            Interval: 30
+            Timeout: 5
+            Retries: 3
+            StartPeriod: 60
+      Tags:
+        - Key: Name
+          Value: !Sub '${StackNamePrefix}-${Environment}-task-def'
+        - Key: Environment
+          Value: !Ref Environment
+        - Key: Project
+          Value: !Ref ProjectName
+        - Key: ManagedBy
+          Value: CloudFormation
+        - Key: Stack
+          Value: !Ref AWS::StackName
+
+################################################################################
+# Outputs
+################################################################################
+Outputs:
+
+  TaskDefinitionArn:
+    Description: ARN of the ECS Task Definition
+    Value: !Ref TaskDefinition
+    Export:
+      Name: !Sub '${AWS::StackName}-TaskDefinitionArn'
+
+  TaskDefinitionFamily:
+    Description: Family name of the Task Definition
+    Value: !Sub '${StackNamePrefix}-${Environment}'
+    Export:
+      Name: !Sub '${AWS::StackName}-TaskDefinitionFamily'
+
+  LogGroupName:
+    Description: Name of the CloudWatch Logs group
+    Value: !Ref LogGroup
+    Export:
+      Name: !Sub '${AWS::StackName}-LogGroupName'
+
+  ContainerName:
+    Description: Name of the container in the task definition
+    Value: !Sub '${StackNamePrefix}-${Environment}-container'
+    Export:
+      Name: !Sub '${AWS::StackName}-ContainerName'
+
+  ContainerPort:
+    Description: Port the container listens on
+    Value: !Ref ContainerPort
+    Export:
+      Name: !Sub '${AWS::StackName}-ContainerPort'
+
+  StackName:
+    Description: Name of this CloudFormation stack
+    Value: !Ref AWS::StackName
+    Export:
+      Name: !Sub '${AWS::StackName}-StackName'

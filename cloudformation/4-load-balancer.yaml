@@ -1,0 +1,342 @@
+AWSTemplateFormatVersion: '2010-09-09'
+Description: >
+  Application Load Balancer for Fargate Deployment Automation.
+  Creates an ALB with target group and listener. Supports both HTTP and HTTPS,
+  and can be configured as internet-facing or internal.
+
+################################################################################
+# Parameters
+################################################################################
+Parameters:
+  StackNamePrefix:
+    Type: String
+    Description: Prefix for stack naming (e.g., vin-app)
+    AllowedPattern: ^[a-z][a-z0-9-]*$
+    ConstraintDescription: Must start with lowercase letter and contain only lowercase letters, numbers, and hyphens
+    Default: vin-app
+
+  Environment:
+    Type: String
+    Description: Environment name (staging or prod)
+    AllowedValues:
+      - staging
+      - prod
+    Default: staging
+
+  ProjectName:
+    Type: String
+    Description: Name of the project
+    AllowedPattern: ^[a-z][a-z0-9-]*$
+    Default: vin-app
+
+  VpcId:
+    Type: AWS::EC2::VPC::Id
+    Description: VPC ID where load balancer will be created
+
+  PublicSubnetIds:
+    Type: List<AWS::EC2::Subnet::Id>
+    Description: List of public subnet IDs for internet-facing ALB (use at least 2 in different AZs)
+
+  PrivateSubnetIds:
+    Type: List<AWS::EC2::Subnet::Id>
+    Description: List of private subnet IDs for internal ALB (use at least 2 in different AZs)
+
+  LoadBalancerScheme:
+    Type: String
+    Description: Load balancer scheme (internet-facing or internal)
+    AllowedValues:
+      - internet-facing
+      - internal
+    Default: internet-facing
+
+  LoadBalancerProtocol:
+    Type: String
+    Description: Protocol for load balancer listener (HTTP or HTTPS)
+    AllowedValues:
+      - HTTP
+      - HTTPS
+    Default: HTTP
+
+  SSLCertificateArn:
+    Type: String
+    Description: ARN of ACM certificate (required if LoadBalancerProtocol is HTTPS)
+    Default: ''
+
+  ContainerPort:
+    Type: Number
+    Description: Port your application listens on inside the container
+    Default: 8080
+    MinValue: 1
+    MaxValue: 65535
+
+  HealthCheckPath:
+    Type: String
+    Description: Path for ALB health checks (your app must return 200 OK at this path)
+    Default: /health
+
+  HealthCheckIntervalSeconds:
+    Type: Number
+    Description: Health check interval in seconds
+    Default: 30
+    MinValue: 5
+    MaxValue: 300
+
+  HealthCheckTimeoutSeconds:
+    Type: Number
+    Description: Health check timeout in seconds
+    Default: 5
+    MinValue: 2
+    MaxValue: 120
+
+  HealthyThresholdCount:
+    Type: Number
+    Description: Number of consecutive successful health checks before marking target healthy
+    Default: 2
+    MinValue: 2
+    MaxValue: 10
+
+  UnhealthyThresholdCount:
+    Type: Number
+    Description: Number of consecutive failed health checks before marking target unhealthy
+    Default: 3
+    MinValue: 2
+    MaxValue: 10
+
+################################################################################
+# Conditions
+################################################################################
+Conditions:
+  IsInternetFacing: !Equals [!Ref LoadBalancerScheme, 'internet-facing']
+  IsHTTPS: !Equals [!Ref LoadBalancerProtocol, 'HTTPS']
+  IsHTTP: !Equals [!Ref LoadBalancerProtocol, 'HTTP']
+
+################################################################################
+# Metadata
+################################################################################
+Metadata:
+  AWS::CloudFormation::Interface:
+    ParameterGroups:
+      - Label:
+          default: Stack Configuration
+        Parameters:
+          - StackNamePrefix
+          - Environment
+          - ProjectName
+      - Label:
+          default: Network Configuration
+        Parameters:
+          - VpcId
+          - PublicSubnetIds
+          - PrivateSubnetIds
+          - LoadBalancerScheme
+      - Label:
+          default: Load Balancer Configuration
+        Parameters:
+          - LoadBalancerProtocol
+          - SSLCertificateArn
+          - ContainerPort
+      - Label:
+          default: Health Check Configuration
+        Parameters:
+          - HealthCheckPath
+          - HealthCheckIntervalSeconds
+          - HealthCheckTimeoutSeconds
+          - HealthyThresholdCount
+          - UnhealthyThresholdCount
+    ParameterLabels:
+      StackNamePrefix:
+        default: Stack Name Prefix
+      Environment:
+        default: Environment
+      ProjectName:
+        default: Project Name
+      VpcId:
+        default: VPC ID
+      PublicSubnetIds:
+        default: Public Subnet IDs
+      PrivateSubnetIds:
+        default: Private Subnet IDs
+      LoadBalancerScheme:
+        default: Load Balancer Scheme
+      LoadBalancerProtocol:
+        default: Load Balancer Protocol
+      SSLCertificateArn:
+        default: SSL Certificate ARN
+      ContainerPort:
+        default: Container Port
+      HealthCheckPath:
+        default: Health Check Path
+      HealthCheckIntervalSeconds:
+        default: Health Check Interval
+      HealthCheckTimeoutSeconds:
+        default: Health Check Timeout
+      HealthyThresholdCount:
+        default: Healthy Threshold
+      UnhealthyThresholdCount:
+        default: Unhealthy Threshold
+
+################################################################################
+# Resources
+################################################################################
+Resources:
+
+  ##############################################################################
+  # Application Load Balancer
+  ##############################################################################
+  ApplicationLoadBalancer:
+    Type: AWS::ElasticLoadBalancingV2::LoadBalancer
+    Properties:
+      Name: !Sub '${StackNamePrefix}-${Environment}-alb'
+      Type: application
+      Scheme: !Ref LoadBalancerScheme
+      IpAddressType: ipv4
+      Subnets: !If
+        - IsInternetFacing
+        - !Ref PublicSubnetIds
+        - !Ref PrivateSubnetIds
+      SecurityGroups:
+        - Fn::ImportValue: !Sub '${StackNamePrefix}-${Environment}-security-ALBSecurityGroupId'
+      Tags:
+        - Key: Name
+          Value: !Sub '${StackNamePrefix}-${Environment}-alb'
+        - Key: Environment
+          Value: !Ref Environment
+        - Key: Project
+          Value: !Ref ProjectName
+        - Key: ManagedBy
+          Value: CloudFormation
+        - Key: Stack
+          Value: !Ref AWS::StackName
+
+  ##############################################################################
+  # Target Group
+  ##############################################################################
+  TargetGroup:
+    Type: AWS::ElasticLoadBalancingV2::TargetGroup
+    Properties:
+      Name: !Sub '${StackNamePrefix}-${Environment}-tg'
+      VpcId: !Ref VpcId
+      Protocol: HTTP
+      Port: !Ref ContainerPort
+      TargetType: ip  # Required for Fargate
+      HealthCheckEnabled: true
+      HealthCheckProtocol: HTTP
+      HealthCheckPath: !Ref HealthCheckPath
+      HealthCheckIntervalSeconds: !Ref HealthCheckIntervalSeconds
+      HealthCheckTimeoutSeconds: !Ref HealthCheckTimeoutSeconds
+      HealthyThresholdCount: !Ref HealthyThresholdCount
+      UnhealthyThresholdCount: !Ref UnhealthyThresholdCount
+      Matcher:
+        HttpCode: '200'
+      TargetGroupAttributes:
+        - Key: deregistration_delay.timeout_seconds
+          Value: '30'
+        - Key: stickiness.enabled
+          Value: 'false'
+      Tags:
+        - Key: Name
+          Value: !Sub '${StackNamePrefix}-${Environment}-tg'
+        - Key: Environment
+          Value: !Ref Environment
+        - Key: Project
+          Value: !Ref ProjectName
+        - Key: ManagedBy
+          Value: CloudFormation
+        - Key: Stack
+          Value: !Ref AWS::StackName
+
+  ##############################################################################
+  # HTTP Listener (if using HTTP)
+  ##############################################################################
+  HTTPListener:
+    Type: AWS::ElasticLoadBalancingV2::Listener
+    Condition: IsHTTP
+    Properties:
+      LoadBalancerArn: !Ref ApplicationLoadBalancer
+      Protocol: HTTP
+      Port: 80
+      DefaultActions:
+        - Type: forward
+          TargetGroupArn: !Ref TargetGroup
+
+  ##############################################################################
+  # HTTPS Listener (if using HTTPS)
+  ##############################################################################
+  HTTPSListener:
+    Type: AWS::ElasticLoadBalancingV2::Listener
+    Condition: IsHTTPS
+    Properties:
+      LoadBalancerArn: !Ref ApplicationLoadBalancer
+      Protocol: HTTPS
+      Port: 443
+      Certificates:
+        - CertificateArn: !Ref SSLCertificateArn
+      SslPolicy: ELBSecurityPolicy-TLS-1-2-2017-01
+      DefaultActions:
+        - Type: forward
+          TargetGroupArn: !Ref TargetGroup
+
+################################################################################
+# Outputs
+################################################################################
+Outputs:
+
+  LoadBalancerArn:
+    Description: ARN of the Application Load Balancer
+    Value: !Ref ApplicationLoadBalancer
+    Export:
+      Name: !Sub '${AWS::StackName}-LoadBalancerArn'
+
+  LoadBalancerDNS:
+    Description: DNS name of the Application Load Balancer
+    Value: !GetAtt ApplicationLoadBalancer.DNSName
+    Export:
+      Name: !Sub '${AWS::StackName}-LoadBalancerDNS'
+
+  LoadBalancerFullName:
+    Description: Full name of the Application Load Balancer
+    Value: !GetAtt ApplicationLoadBalancer.LoadBalancerFullName
+    Export:
+      Name: !Sub '${AWS::StackName}-LoadBalancerFullName'
+
+  LoadBalancerHostedZoneId:
+    Description: Hosted Zone ID of the Application Load Balancer
+    Value: !GetAtt ApplicationLoadBalancer.CanonicalHostedZoneID
+    Export:
+      Name: !Sub '${AWS::StackName}-LoadBalancerHostedZoneId'
+
+  TargetGroupArn:
+    Description: ARN of the Target Group
+    Value: !Ref TargetGroup
+    Export:
+      Name: !Sub '${AWS::StackName}-TargetGroupArn'
+
+  TargetGroupFullName:
+    Description: Full name of the Target Group
+    Value: !GetAtt TargetGroup.TargetGroupFullName
+    Export:
+      Name: !Sub '${AWS::StackName}-TargetGroupFullName'
+
+  ListenerArn:
+    Description: ARN of the Listener (HTTP or HTTPS)
+    Value: !If
+      - IsHTTPS
+      - !Ref HTTPSListener
+      - !Ref HTTPListener
+    Export:
+      Name: !Sub '${AWS::StackName}-ListenerArn'
+
+  LoadBalancerURL:
+    Description: URL of the Application Load Balancer
+    Value: !Sub
+      - '${Protocol}://${DNS}'
+      - Protocol: !If [IsHTTPS, 'https', 'http']
+        DNS: !GetAtt ApplicationLoadBalancer.DNSName
+    Export:
+      Name: !Sub '${AWS::StackName}-LoadBalancerURL'
+
+  StackName:
+    Description: Name of this CloudFormation stack
+    Value: !Ref AWS::StackName
+    Export:
+      Name: !Sub '${AWS::StackName}-StackName'

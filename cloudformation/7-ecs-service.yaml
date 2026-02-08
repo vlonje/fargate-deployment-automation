@@ -1,0 +1,263 @@
+AWSTemplateFormatVersion: '2010-09-09'
+Description: >
+  ECS Fargate Service for Fargate Deployment Automation.
+  Creates an ECS service that runs Fargate tasks and connects them to the
+  Application Load Balancer. This is the final piece that brings all stacks together.
+
+################################################################################
+# Parameters
+################################################################################
+Parameters:
+  StackNamePrefix:
+    Type: String
+    Description: Prefix for stack naming (e.g., vin-app)
+    AllowedPattern: ^[a-z][a-z0-9-]*$
+    ConstraintDescription: Must start with lowercase letter and contain only lowercase letters, numbers, and hyphens
+    Default: vin-app
+
+  Environment:
+    Type: String
+    Description: Environment name (staging or prod)
+    AllowedValues:
+      - staging
+      - prod
+    Default: staging
+
+  ProjectName:
+    Type: String
+    Description: Name of the project
+    AllowedPattern: ^[a-z][a-z0-9-]*$
+    Default: vin-app
+
+  PrivateSubnetIds:
+    Type: List<AWS::EC2::Subnet::Id>
+    Description: List of private subnet IDs for ECS tasks (use at least 2 in different AZs)
+
+  DesiredCount:
+    Type: Number
+    Description: Number of tasks to run
+    Default: 1
+    MinValue: 0
+    MaxValue: 10
+
+  MinCapacity:
+    Type: Number
+    Description: Minimum number of tasks for auto-scaling
+    Default: 1
+    MinValue: 0
+    MaxValue: 10
+
+  MaxCapacity:
+    Type: Number
+    Description: Maximum number of tasks for auto-scaling
+    Default: 4
+    MinValue: 1
+    MaxValue: 100
+
+  HealthCheckGracePeriodSeconds:
+    Type: Number
+    Description: Grace period for health checks (time for container to start)
+    Default: 60
+    MinValue: 0
+    MaxValue: 2147483647
+
+  DeploymentMaximumPercent:
+    Type: Number
+    Description: Maximum percentage of tasks during deployment
+    Default: 200
+    MinValue: 100
+    MaxValue: 200
+
+  DeploymentMinimumHealthyPercent:
+    Type: Number
+    Description: Minimum healthy percentage during deployment
+    Default: 100
+    MinValue: 0
+    MaxValue: 100
+
+################################################################################
+# Metadata
+################################################################################
+Metadata:
+  AWS::CloudFormation::Interface:
+    ParameterGroups:
+      - Label:
+          default: Stack Configuration
+        Parameters:
+          - StackNamePrefix
+          - Environment
+          - ProjectName
+      - Label:
+          default: Network Configuration
+        Parameters:
+          - PrivateSubnetIds
+      - Label:
+          default: Service Configuration
+        Parameters:
+          - DesiredCount
+          - HealthCheckGracePeriodSeconds
+      - Label:
+          default: Deployment Configuration
+        Parameters:
+          - DeploymentMaximumPercent
+          - DeploymentMinimumHealthyPercent
+      - Label:
+          default: Auto-Scaling Configuration
+        Parameters:
+          - MinCapacity
+          - MaxCapacity
+    ParameterLabels:
+      StackNamePrefix:
+        default: Stack Name Prefix
+      Environment:
+        default: Environment
+      ProjectName:
+        default: Project Name
+      PrivateSubnetIds:
+        default: Private Subnet IDs
+      DesiredCount:
+        default: Desired Task Count
+      MinCapacity:
+        default: Minimum Capacity
+      MaxCapacity:
+        default: Maximum Capacity
+      HealthCheckGracePeriodSeconds:
+        default: Health Check Grace Period
+      DeploymentMaximumPercent:
+        default: Deployment Maximum Percent
+      DeploymentMinimumHealthyPercent:
+        default: Deployment Minimum Healthy Percent
+
+################################################################################
+# Resources
+################################################################################
+Resources:
+
+  ##############################################################################
+  # ECS Service
+  ##############################################################################
+  ECSService:
+    Type: AWS::ECS::Service
+    Properties:
+      ServiceName: !Sub '${StackNamePrefix}-${Environment}-service'
+      Cluster:
+        Fn::ImportValue: !Sub '${StackNamePrefix}-${Environment}-cluster-ClusterArn'
+      TaskDefinition:
+        Fn::ImportValue: !Sub '${StackNamePrefix}-${Environment}-task-TaskDefinitionArn'
+      LaunchType: FARGATE
+      DesiredCount: !Ref DesiredCount
+      HealthCheckGracePeriodSeconds: !Ref HealthCheckGracePeriodSeconds
+      NetworkConfiguration:
+        AwsvpcConfiguration:
+          AssignPublicIp: DISABLED
+          Subnets: !Ref PrivateSubnetIds
+          SecurityGroups:
+            - Fn::ImportValue: !Sub '${StackNamePrefix}-${Environment}-security-ECSTaskSecurityGroupId'
+      LoadBalancers:
+        - ContainerName:
+            Fn::ImportValue: !Sub '${StackNamePrefix}-${Environment}-task-ContainerName'
+          ContainerPort:
+            Fn::ImportValue: !Sub '${StackNamePrefix}-${Environment}-task-ContainerPort'
+          TargetGroupArn:
+            Fn::ImportValue: !Sub '${StackNamePrefix}-${Environment}-alb-TargetGroupArn'
+      DeploymentConfiguration:
+        MaximumPercent: !Ref DeploymentMaximumPercent
+        MinimumHealthyPercent: !Ref DeploymentMinimumHealthyPercent
+        DeploymentCircuitBreaker:
+          Enable: true
+          Rollback: true
+      EnableExecuteCommand: true
+      PropagateTags: SERVICE
+      Tags:
+        - Key: Name
+          Value: !Sub '${StackNamePrefix}-${Environment}-service'
+        - Key: Environment
+          Value: !Ref Environment
+        - Key: Project
+          Value: !Ref ProjectName
+        - Key: ManagedBy
+          Value: CloudFormation
+        - Key: Stack
+          Value: !Ref AWS::StackName
+
+  ##############################################################################
+  # Auto-Scaling Target
+  ##############################################################################
+  AutoScalingTarget:
+    Type: AWS::ApplicationAutoScaling::ScalableTarget
+    Properties:
+      MaxCapacity: !Ref MaxCapacity
+      MinCapacity: !Ref MinCapacity
+      ResourceId: !Sub 'service/${StackNamePrefix}-${Environment}-cluster/${StackNamePrefix}-${Environment}-service'
+      RoleARN: !Sub 'arn:aws:iam::${AWS::AccountId}:role/aws-service-role/ecs.application-autoscaling.amazonaws.com/AWSServiceRoleForApplicationAutoScaling_ECSService'
+      ScalableDimension: ecs:service:DesiredCount
+      ServiceNamespace: ecs
+    DependsOn: ECSService
+
+  ##############################################################################
+  # Auto-Scaling Policy - Target Tracking (CPU)
+  ##############################################################################
+  AutoScalingPolicyCPU:
+    Type: AWS::ApplicationAutoScaling::ScalingPolicy
+    Properties:
+      PolicyName: !Sub '${StackNamePrefix}-${Environment}-cpu-scaling'
+      PolicyType: TargetTrackingScaling
+      ScalingTargetId: !Ref AutoScalingTarget
+      TargetTrackingScalingPolicyConfiguration:
+        PredefinedMetricSpecification:
+          PredefinedMetricType: ECSServiceAverageCPUUtilization
+        TargetValue: 70.0
+        ScaleInCooldown: 300
+        ScaleOutCooldown: 60
+
+  ##############################################################################
+  # Auto-Scaling Policy - Target Tracking (Memory)
+  ##############################################################################
+  AutoScalingPolicyMemory:
+    Type: AWS::ApplicationAutoScaling::ScalingPolicy
+    Properties:
+      PolicyName: !Sub '${StackNamePrefix}-${Environment}-memory-scaling'
+      PolicyType: TargetTrackingScaling
+      ScalingTargetId: !Ref AutoScalingTarget
+      TargetTrackingScalingPolicyConfiguration:
+        PredefinedMetricSpecification:
+          PredefinedMetricType: ECSServiceAverageMemoryUtilization
+        TargetValue: 80.0
+        ScaleInCooldown: 300
+        ScaleOutCooldown: 60
+
+################################################################################
+# Outputs
+################################################################################
+Outputs:
+
+  ServiceArn:
+    Description: ARN of the ECS service
+    Value: !Ref ECSService
+    Export:
+      Name: !Sub '${AWS::StackName}-ServiceArn'
+
+  ServiceName:
+    Description: Name of the ECS service
+    Value: !GetAtt ECSService.Name
+    Export:
+      Name: !Sub '${AWS::StackName}-ServiceName'
+
+  AutoScalingTargetId:
+    Description: Auto-scaling target ID
+    Value: !Ref AutoScalingTarget
+    Export:
+      Name: !Sub '${AWS::StackName}-AutoScalingTargetId'
+
+  LoadBalancerURL:
+    Description: URL of the Application Load Balancer
+    Value:
+      Fn::ImportValue: !Sub '${StackNamePrefix}-${Environment}-alb-LoadBalancerURL'
+    Export:
+      Name: !Sub '${AWS::StackName}-LoadBalancerURL'
+
+  StackName:
+    Description: Name of this CloudFormation stack
+    Value: !Ref AWS::StackName
+    Export:
+      Name: !Sub '${AWS::StackName}-StackName'

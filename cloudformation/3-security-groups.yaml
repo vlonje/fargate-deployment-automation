@@ -1,0 +1,241 @@
+AWSTemplateFormatVersion: '2010-09-09'
+Description: >
+  Security Groups for Fargate Deployment Automation.
+  Creates security groups for the Application Load Balancer and ECS tasks
+  with appropriate ingress/egress rules based on environment configuration.
+
+################################################################################
+# Parameters
+################################################################################
+Parameters:
+  StackNamePrefix:
+    Type: String
+    Description: Prefix for stack naming (e.g., vin-app)
+    AllowedPattern: ^[a-z][a-z0-9-]*$
+    ConstraintDescription: Must start with lowercase letter and contain only lowercase letters, numbers, and hyphens
+    Default: vin-app
+
+  Environment:
+    Type: String
+    Description: Environment name (staging or prod)
+    AllowedValues:
+      - staging
+      - prod
+    Default: staging
+
+  ProjectName:
+    Type: String
+    Description: Name of the project
+    AllowedPattern: ^[a-z][a-z0-9-]*$
+    Default: vin-app
+
+  VpcId:
+    Type: AWS::EC2::VPC::Id
+    Description: VPC ID where security groups will be created
+
+  LoadBalancerScheme:
+    Type: String
+    Description: Load balancer scheme (internet-facing or internal)
+    AllowedValues:
+      - internet-facing
+      - internal
+    Default: internet-facing
+
+  LoadBalancerProtocol:
+    Type: String
+    Description: Protocol for load balancer listener (HTTP or HTTPS)
+    AllowedValues:
+      - HTTP
+      - HTTPS
+    Default: HTTP
+
+  ContainerPort:
+    Type: Number
+    Description: Port your application listens on inside the container
+    Default: 8080
+    MinValue: 1
+    MaxValue: 65535
+
+################################################################################
+# Conditions
+################################################################################
+Conditions:
+  IsInternetFacing: !Equals [!Ref LoadBalancerScheme, 'internet-facing']
+  IsHTTPS: !Equals [!Ref LoadBalancerProtocol, 'HTTPS']
+  IsHTTP: !Equals [!Ref LoadBalancerProtocol, 'HTTP']
+
+################################################################################
+# Metadata
+################################################################################
+Metadata:
+  AWS::CloudFormation::Interface:
+    ParameterGroups:
+      - Label:
+          default: Stack Configuration
+        Parameters:
+          - StackNamePrefix
+          - Environment
+          - ProjectName
+      - Label:
+          default: Network Configuration
+        Parameters:
+          - VpcId
+          - LoadBalancerScheme
+          - LoadBalancerProtocol
+          - ContainerPort
+    ParameterLabels:
+      StackNamePrefix:
+        default: Stack Name Prefix
+      Environment:
+        default: Environment
+      ProjectName:
+        default: Project Name
+      VpcId:
+        default: VPC ID
+      LoadBalancerScheme:
+        default: Load Balancer Scheme
+      LoadBalancerProtocol:
+        default: Load Balancer Protocol
+      ContainerPort:
+        default: Container Port
+
+################################################################################
+# Resources
+################################################################################
+Resources:
+
+  ##############################################################################
+  # Application Load Balancer Security Group
+  ##############################################################################
+  ALBSecurityGroup:
+    Type: AWS::EC2::SecurityGroup
+    Properties:
+      GroupName: !Sub '${StackNamePrefix}-${Environment}-alb-sg'
+      GroupDescription: !Sub 'Security group for ${ProjectName} ${Environment} Application Load Balancer'
+      VpcId: !Ref VpcId
+      Tags:
+        - Key: Name
+          Value: !Sub '${StackNamePrefix}-${Environment}-alb-sg'
+        - Key: Environment
+          Value: !Ref Environment
+        - Key: Project
+          Value: !Ref ProjectName
+        - Key: ManagedBy
+          Value: CloudFormation
+        - Key: Stack
+          Value: !Ref AWS::StackName
+
+  ##############################################################################
+  # ECS Task Security Group
+  ##############################################################################
+  ECSTaskSecurityGroup:
+    Type: AWS::EC2::SecurityGroup
+    Properties:
+      GroupName: !Sub '${StackNamePrefix}-${Environment}-ecs-task-sg'
+      GroupDescription: !Sub 'Security group for ${ProjectName} ${Environment} ECS Fargate tasks'
+      VpcId: !Ref VpcId
+      SecurityGroupEgress:
+        # Allow all outbound traffic (for pulling images, external API calls, etc.)
+        - IpProtocol: -1
+          CidrIp: 0.0.0.0/0
+          Description: Allow all outbound traffic
+      Tags:
+        - Key: Name
+          Value: !Sub '${StackNamePrefix}-${Environment}-ecs-task-sg'
+        - Key: Environment
+          Value: !Ref Environment
+        - Key: Project
+          Value: !Ref ProjectName
+        - Key: ManagedBy
+          Value: CloudFormation
+        - Key: Stack
+          Value: !Ref AWS::StackName
+
+  ##############################################################################
+  # HTTP Ingress Rule for ALB (if using HTTP)
+  ##############################################################################
+  ALBHTTPIngressRule:
+    Type: AWS::EC2::SecurityGroupIngress
+    Condition: IsHTTP
+    Properties:
+      GroupId: !Ref ALBSecurityGroup
+      IpProtocol: tcp
+      FromPort: 80
+      ToPort: 80
+      CidrIp: !If [IsInternetFacing, '0.0.0.0/0', '10.0.0.0/8']
+      Description: !If [IsInternetFacing, 'Allow HTTP from internet', 'Allow HTTP from VPC']
+
+  ##############################################################################
+  # HTTPS Ingress Rule for ALB (if using HTTPS)
+  ##############################################################################
+  ALBHTTPSIngressRule:
+    Type: AWS::EC2::SecurityGroupIngress
+    Condition: IsHTTPS
+    Properties:
+      GroupId: !Ref ALBSecurityGroup
+      IpProtocol: tcp
+      FromPort: 443
+      ToPort: 443
+      CidrIp: !If [IsInternetFacing, '0.0.0.0/0', '10.0.0.0/8']
+      Description: !If [IsInternetFacing, 'Allow HTTPS from internet', 'Allow HTTPS from VPC']
+
+  ##############################################################################
+  # Egress Rule for ALB to ECS Tasks
+  ##############################################################################
+  ALBToECSEgressRule:
+    Type: AWS::EC2::SecurityGroupEgress
+    Properties:
+      GroupId: !Ref ALBSecurityGroup
+      IpProtocol: tcp
+      FromPort: !Ref ContainerPort
+      ToPort: !Ref ContainerPort
+      DestinationSecurityGroupId: !Ref ECSTaskSecurityGroup
+      Description: Allow traffic to ECS tasks
+
+  ##############################################################################
+  # Ingress Rule for ECS Tasks from ALB
+  ##############################################################################
+  ECSTaskFromALBIngressRule:
+    Type: AWS::EC2::SecurityGroupIngress
+    Properties:
+      GroupId: !Ref ECSTaskSecurityGroup
+      IpProtocol: tcp
+      FromPort: !Ref ContainerPort
+      ToPort: !Ref ContainerPort
+      SourceSecurityGroupId: !Ref ALBSecurityGroup
+      Description: Allow traffic from ALB
+
+################################################################################
+# Outputs
+################################################################################
+Outputs:
+
+  ALBSecurityGroupId:
+    Description: Security Group ID for Application Load Balancer
+    Value: !Ref ALBSecurityGroup
+    Export:
+      Name: !Sub '${AWS::StackName}-ALBSecurityGroupId'
+
+  ECSTaskSecurityGroupId:
+    Description: Security Group ID for ECS Fargate tasks
+    Value: !Ref ECSTaskSecurityGroup
+    Export:
+      Name: !Sub '${AWS::StackName}-ECSTaskSecurityGroupId'
+
+  ALBSecurityGroupName:
+    Description: Name of the ALB Security Group
+    Value: !Ref ALBSecurityGroup
+    Export:
+      Name: !Sub '${AWS::StackName}-ALBSecurityGroupName'
+
+  ECSTaskSecurityGroupName:
+    Description: Name of the ECS Task Security Group
+    Value: !Ref ECSTaskSecurityGroup
+    Export:
+      Name: !Sub '${AWS::StackName}-ECSTaskSecurityGroupName'
+
+  StackName:
+    Description: Name of this CloudFormation stack
+    Value: !Ref AWS::StackName
+    Export:
+      Name: !Sub '${AWS::StackName}-StackName'
