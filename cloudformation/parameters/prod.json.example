@@ -1,0 +1,22 @@
+{
+  "StackNamePrefix": "vin-app",
+  "Environment": "prod",
+  "ProjectName": "vin-app",
+  "GitHubRepo": "https://github.com/yourusername/your-repo",
+  "GitHubBranch": "main",
+  "DockerfilePath": "./Dockerfile",
+  "ContainerPort": "8080",
+  "HealthCheckPath": "/health",
+  "LoadBalancerScheme": "internet-facing",
+  "LoadBalancerProtocol": "HTTPS",
+  "SSLCertificateArn": "arn:aws:acm:region:account:certificate/certificate-id",
+  "DesiredCount": "2",
+  "TaskCPU": "512",
+  "TaskMemory": "1024",
+  "VpcId": "vpc-xxxxxxxx",
+  "PublicSubnetIds": "subnet-xxx,subnet-yyy",
+  "PrivateSubnetIds": "subnet-aaa,subnet-bbb",
+  "ECSTaskExecutionRoleArn": "arn:aws:iam::account:role/ecsTaskExecutionRole",
+  "ECSTaskRoleArn": "arn:aws:iam::account:role/ecsTaskRole",
+  "CodeBuildServiceRoleArn": "arn:aws:iam::account:role/codebuild-service-role"
+}

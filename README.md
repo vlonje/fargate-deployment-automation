@@ -42,6 +42,7 @@ This framework provides a **reusable, modular infrastructure-as-code solution** 
 
 ## 📋 Table of Contents
 
+- [Important: First-Time Setup](#important-first-time-setup)
 - [Prerequisites](#prerequisites)
 - [Quick Start](#quick-start)
 - [Local Testing (No AWS Account)](#local-testing-no-aws-account)
@@ -53,6 +54,33 @@ This framework provides a **reusable, modular infrastructure-as-code solution** 
 - [Troubleshooting](#troubleshooting)
 - [Advanced Topics](#advanced-topics)
 - [Contributing](#contributing)
+
+## ⚠️ Important: First-Time Setup
+
+**BEFORE deploying, you MUST create your parameter files from the templates:**
+
+The `.example` files are templates that are safe to commit to git. You need to create actual parameter files with your AWS resource IDs:
+
+```bash
+# 1. Copy the example files
+cp cloudformation/parameters/staging.json.example cloudformation/parameters/staging.json
+cp cloudformation/parameters/prod.json.example cloudformation/parameters/prod.json
+
+# 2. Edit with your actual AWS resource IDs (VPC, subnets, IAM roles, etc.)
+nano cloudformation/parameters/staging.json
+nano cloudformation/parameters/prod.json
+
+# 3. NEVER commit staging.json or prod.json to git (they're in .gitignore)
+```
+
+**Why?**
+- `.example` files contain placeholder values (safe for git)
+- Actual `staging.json` and `prod.json` contain sensitive AWS resource IDs (git-ignored)
+- This keeps your infrastructure secure while sharing templates with your team
+
+See [Configuration](#configuration) section for detailed parameter documentation.
+
+---
 
 ## 🔧 Prerequisites
 
